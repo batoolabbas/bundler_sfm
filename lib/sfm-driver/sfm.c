@@ -307,6 +307,7 @@ int sfm_project_rd(camera_params_t *init, double *K, double *k,
 
     double tnew[3];
     double b_cam[3];
+	int in_front = 1;
 
     t = init->t;
 
@@ -314,8 +315,7 @@ int sfm_project_rd(camera_params_t *init, double *K, double *k,
     tnew[1] = dt[1];
     tnew[2] = dt[2];
 
-    int in_front = 1;
-
+	
     /* Project! */
     if (!explicit_camera_centers) {
 	matrix_product331(R, b, b_cam);
@@ -793,10 +793,10 @@ void run_sfm(int num_pts, int num_cameras, int ncons,
     global_params.global_params.f = 1.0;
     global_params.init_params = init_camera_params;
 
-    global_last_ws = 
+    global_last_ws = (double *)
 	safe_malloc(3 * num_cameras * sizeof(double), "global_last_ws");
 
-    global_last_Rs = 
+    global_last_Rs = (double *)
 	safe_malloc(9 * num_cameras * sizeof(double), "global_last_ws");
 
     global_params.points = init_pts;
