@@ -286,6 +286,9 @@ public:
     /* Quickly compute pose of all cameras */
     void BundleAdjustFast();
 
+	/*Get parameters for new images without changing underlying reconstruction*/
+	void BundleGetParams(double *S = NULL, double *U = NULL, double *V = NULL, 
+                  double *W = NULL);
     
     /* Estimate poses of all ignored cameras */
     void EstimateIgnoredCameras(int &curr_num_cameras,

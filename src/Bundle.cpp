@@ -4259,3 +4259,242 @@ int BundlerApp::RemoveBadPointsAndCameras(int num_points, int num_cameras,
 
     return num_pruned;
 }
+
+/* 
+ *  Copyright (c) 2015-2016  Batool Abbas (batool.abbas (at) ingrain.io)
+ *    and Ingrain Media Inc
+ *
+/* Routines for getting camera parameters for test images */
+void BundlerApp::BundleGetParams(double *S, double *U, double *V, double *W) 
+{
+   /* Compute initial image information */
+    ComputeGeometricConstraints();
+
+    int num_pts = (int) m_point_data.size();
+    int num_images = GetNumImages();
+
+    /* Initialize all keypoints to have not been matched */
+    printf("[GetParams] Initializing keypoints...\n");
+    for (int i = 0; i < num_images; i++) {
+        int num_keys = GetNumKeys(i);
+        for (int j = 0; j < num_keys; j++) {
+            GetKey(i,j).m_extra = -1;
+        }
+    }
+
+    /* Set up the cameras */
+    int num_init_cams = 0;
+    int *added_order = new int[num_images];
+    int *added_order_inv = new int[num_images];
+    std::vector<ImageKeyVector> pt_views;
+
+    camera_params_t *cameras = new camera_params_t[num_images];
+
+    printf("[GetParams] Setting up cameras\n");
+    for (int i = 0; i < num_images; i++) {
+        printf(".");
+        fflush(stdout);
+
+        if (m_image_data[i].m_camera.m_adjusted) {
+            m_image_data[i].LoadKeys(false, !m_optimize_for_fisheye);
+
+            m_image_data[i].ReadKeyColors();
+            SetTracks(i);
+
+            added_order[num_init_cams] = i;
+            added_order_inv[i] = num_init_cams;
+
+            InitializeCameraParams(m_image_data[i], cameras[num_init_cams]);
+
+            /* Restore the camera parameters */
+            memcpy(cameras[num_init_cams].R, m_image_data[i].m_camera.m_R, 
+                sizeof(double) * 9);
+
+            matrix_transpose_product(3, 3, 3, 1, 
+                m_image_data[i].m_camera.m_R,
+                m_image_data[i].m_camera.m_t,
+                cameras[num_init_cams].t);
+
+            cameras[num_init_cams].t[0] *= -1.0;
+            cameras[num_init_cams].t[1] *= -1.0;
+            cameras[num_init_cams].t[2] *= -1.0;
+
+            cameras[num_init_cams].f = m_image_data[i].m_camera.m_focal;
+            cameras[num_init_cams].k[0] = m_image_data[i].m_camera.m_k[0];
+            cameras[num_init_cams].k[1] = m_image_data[i].m_camera.m_k[1];
+
+            /* Set the camera constraints */
+            SetCameraConstraints(i, cameras + num_init_cams);
+
+            if (m_constrain_focal) {
+                /* Bad hack... */
+                if (m_image_data[i].m_has_init_focal) {
+                    double diff = cameras[num_init_cams].f - 
+                        m_image_data[i].m_init_focal;
+
+                    if (fabs(diff) / m_image_data[i].m_init_focal < 0.4) {
+                        printf("[GetParams] Constraining focal "
+			       "length for camera %d\n", i);
+
+                        /* Setup the focal length constraints */
+                        SetFocalConstraint(m_image_data[i], 
+                            cameras + num_init_cams);
+                    }
+                }
+            }
+
+            num_init_cams++;
+        } else {
+            added_order_inv[i] = -1;
+        }
+    }
+
+    printf("\n");
+
+    /* Set up the points, visibility mask and projections */
+    printf("[GetParams] Setting up views...\n");
+
+#ifndef RERUN_ADD_POINTS
+    v3_t *init_pts = new v3_t[num_pts];
+#else
+    v3_t *init_pts = new v3_t[m_track_data.size()];
+#endif
+
+    v3_t *colors = new v3_t[num_pts];
+
+    for (int i = 0; i < num_pts; i++) {
+        PointData &pt = m_point_data[i];
+        int num_views = pt.m_views.size();
+
+        // init_pts[i] = v3_new(pt.m_pos[0], pt.m_pos[1], -pt.m_pos[2]);
+        init_pts[i] = v3_new(pt.m_pos[0], pt.m_pos[1], pt.m_pos[2]);
+        colors[i] = v3_new(pt.m_color[0], pt.m_color[1], pt.m_color[2]);
+
+        ImageKeyVector views;
+        double *views_arr = new double[num_views];
+        int *perm = new int[num_views];
+
+        for (int j = 0; j < num_views; j++) {
+            ImageKey ik = pt.m_views[j];
+
+            int v = ik.first;
+            int k = ik.second;
+
+            if (m_image_data[v].m_keys[k].m_extra != -1) {
+                printf("Error! Already assigned this key "
+		       "[%d,%d] <- %d != %d!\n", v, k, 
+		       m_image_data[v].m_keys[k].m_extra, i);
+            }
+
+            m_image_data[v].m_keys[k].m_extra = i;
+            ik.first = added_order_inv[ik.first];
+            views_arr[j] = (double) v;
+
+            views.push_back(ik);
+        }
+
+        /* Sort the views */
+        qsort_ascending();
+        qsort_perm(num_views, views_arr, perm);
+
+        ImageKeyVector views_sorted;
+        for (int j = 0; j < num_views; j++) {
+            views_sorted.push_back(views[perm[j]]);
+        }
+
+        pt_views.push_back(views_sorted);
+
+        delete [] views_arr;
+        delete [] perm;
+    }
+
+    CheckPointKeyConsistency(pt_views, added_order);
+
+    DumpOutputFile(m_output_directory, m_bundle_output_file, 
+        num_images, num_init_cams, num_pts,
+        added_order, cameras, init_pts, colors, pt_views);
+
+    RunSFM(num_pts, num_init_cams, 0, false, cameras, 
+           init_pts, added_order, colors, pt_views, 
+           0, 0, 0, 0.0 /*eps2*/, S, U, V, W);
+
+    /* Save the camera parameters and points */
+
+    /* Cameras */
+
+    for (int i = 0; i < num_images; i++) {
+        m_image_data[i].m_camera.m_adjusted = false;
+    }
+
+    printf("Focal lengths:\n");
+    for (int i = 0; i < num_init_cams; i++) {
+        int img = added_order[i];
+
+        m_image_data[img].m_camera.m_adjusted = true;
+        memcpy(m_image_data[img].m_camera.m_R, cameras[i].R, 
+            9 * sizeof(double));
+
+        matrix_product(3, 3, 3, 1, 
+            cameras[i].R, cameras[i].t,
+            m_image_data[img].m_camera.m_t);
+
+        matrix_scale(3, 1, 
+            m_image_data[img].m_camera.m_t, -1.0, 
+            m_image_data[img].m_camera.m_t);
+
+        m_image_data[img].m_camera.m_focal = cameras[i].f;
+
+        printf("  [%d]: %0.3f\n", img, cameras[i].f);
+
+        m_image_data[img].m_camera.Finalize();
+    }
+
+    fflush(stdout);
+
+    /* Points */
+    m_point_data.clear();
+    for (int i = 0; i < num_pts; i++) {
+        /* Check if the point is visible in any view */
+        if ((int) pt_views[i].size() == 0) 
+            continue; /* Invisible */
+
+        PointData pdata;
+        pdata.m_pos[0] = Vx(init_pts[i]);
+        pdata.m_pos[1] = Vy(init_pts[i]);
+        pdata.m_pos[2] = Vz(init_pts[i]);
+
+        pdata.m_color[0] = (float) Vx(colors[i]);
+        pdata.m_color[1] = (float) Vy(colors[i]);
+        pdata.m_color[2] = (float) Vz(colors[i]);
+
+#if 1
+        for (int j = 0; j < (int) pt_views[i].size(); j++) {
+            int v = pt_views[i][j].first;
+            int vnew = added_order[v];
+            pdata.m_views.push_back(ImageKey(vnew, pt_views[i][j].second));
+        }
+#else
+        pdata.m_views = pt_views[i];
+#endif
+
+        m_point_data.push_back(pdata);
+    }
+
+    /* Save the output file */
+    DumpPointsToPly(m_output_directory, "points_readjusted.ply", 
+        num_pts, num_init_cams, init_pts, colors, cameras);
+
+    /* Dump output */
+    if (m_bundle_output_file != NULL) {
+        DumpOutputFile(m_output_directory, m_bundle_output_file, 
+            num_images, num_init_cams, num_pts,
+            added_order, cameras, init_pts, colors, pt_views);
+    }
+
+    delete [] cameras;
+    delete [] init_pts;
+
+    delete [] added_order;
+    delete [] added_order_inv;
+}
+
