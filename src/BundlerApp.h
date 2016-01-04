@@ -41,7 +41,7 @@ public:
         m_analyze_matches = false;
 
         m_estimate_ignored = false;
-
+		m_get_params = false;
         m_use_constraints = false;
         m_constrain_focal = false;
         m_constrain_focal_weight = 100.0;
@@ -287,8 +287,7 @@ public:
     void BundleAdjustFast();
 
 	/*Get parameters for new images without changing underlying reconstruction*/
-	void BundleGetParams(double *S = NULL, double *U = NULL, double *V = NULL, 
-                  double *W = NULL);
+	void BundleGetParams();
     
     /* Estimate poses of all ignored cameras */
     void EstimateIgnoredCameras(int &curr_num_cameras,
@@ -603,7 +602,7 @@ public:
     bool m_reposition_scene;     /* Should we reposition the scene? */
     bool m_prune_bad_points;     /* Should we prune bad points? */
 
-
+	bool m_get_params;			/*Do we only want camera parameters for new images or not */
 
     double m_scale_focal;        /* Amount by which to scale the focal
                                   * lengths */

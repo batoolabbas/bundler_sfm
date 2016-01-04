@@ -4102,7 +4102,11 @@ bool BundlerApp::BundleRegisterImage(ImageData &data, bool init_location)
     int num_inliers = (int) inliers_final.size();
 
     success = false;
+#if m_get_params
+#define MIN_INLIERS_ADD_IMAGE 1
+#else
 #define MIN_INLIERS_ADD_IMAGE 16
+#endif
     if (num_inliers < 0.5 * num_points_final) {
         printf("[BundleRegisterImage] "
 	       "Threw out too many outliers [%d / %d]\n", 
@@ -4260,21 +4264,17 @@ int BundlerApp::RemoveBadPointsAndCameras(int num_points, int num_cameras,
     return num_pruned;
 }
 
-/* 
- *  Copyright (c) 2015-2016  Batool Abbas (batool.abbas (at) ingrain.io)
- *    and Ingrain Media Inc
- *
-/* Routines for getting camera parameters for test images */
-void BundlerApp::BundleGetParams(double *S, double *U, double *V, double *W) 
+
+void BundlerApp::BundleGetParams() 
 {
-   /* Compute initial image information */
+    /* Compute initial image information */
     ComputeGeometricConstraints();
 
     int num_pts = (int) m_point_data.size();
     int num_images = GetNumImages();
 
     /* Initialize all keypoints to have not been matched */
-    printf("[GetParams] Initializing keypoints...\n");
+    printf("[ReRunSFM] Initializing keypoints...\n");
     for (int i = 0; i < num_images; i++) {
         int num_keys = GetNumKeys(i);
         for (int j = 0; j < num_keys; j++) {
@@ -4290,7 +4290,7 @@ void BundlerApp::BundleGetParams(double *S, double *U, double *V, double *W)
 
     camera_params_t *cameras = new camera_params_t[num_images];
 
-    printf("[GetParams] Setting up cameras\n");
+    printf("[ReRunSFM] Setting up cameras\n");
     for (int i = 0; i < num_images; i++) {
         printf(".");
         fflush(stdout);
@@ -4333,7 +4333,7 @@ void BundlerApp::BundleGetParams(double *S, double *U, double *V, double *W)
                         m_image_data[i].m_init_focal;
 
                     if (fabs(diff) / m_image_data[i].m_init_focal < 0.4) {
-                        printf("[GetParams] Constraining focal "
+                        printf("[ReRunSFM] Constraining focal "
 			       "length for camera %d\n", i);
 
                         /* Setup the focal length constraints */
@@ -4352,13 +4352,9 @@ void BundlerApp::BundleGetParams(double *S, double *U, double *V, double *W)
     printf("\n");
 
     /* Set up the points, visibility mask and projections */
-    printf("[GetParams] Setting up views...\n");
+    printf("[ReRunSFM] Setting up views...\n");
 
-#ifndef RERUN_ADD_POINTS
-    v3_t *init_pts = new v3_t[num_pts];
-#else
     v3_t *init_pts = new v3_t[m_track_data.size()];
-#endif
 
     v3_t *colors = new v3_t[num_pts];
 
@@ -4410,13 +4406,17 @@ void BundlerApp::BundleGetParams(double *S, double *U, double *V, double *W)
 
     CheckPointKeyConsistency(pt_views, added_order);
 
+    BundleAdjustAddAllNewPoints(num_pts, num_init_cams,
+        added_order, cameras, init_pts, colors,
+        0.0, pt_views, 16.0, 2);
+
     DumpOutputFile(m_output_directory, m_bundle_output_file, 
         num_images, num_init_cams, num_pts,
         added_order, cameras, init_pts, colors, pt_views);
 
     RunSFM(num_pts, num_init_cams, 0, false, cameras, 
            init_pts, added_order, colors, pt_views, 
-           0, 0, 0, 0.0 /*eps2*/, S, U, V, W);
+           0, 0, 0, 0.0 /*eps2*/);
 
     /* Save the camera parameters and points */
 

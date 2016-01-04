@@ -79,3 +79,6 @@ vc++/Bundler.sln
 vc++/Bundler.sln
 *.sln
 *.sln
+*.cam
+vc++/kermit011.trk
+*.trk

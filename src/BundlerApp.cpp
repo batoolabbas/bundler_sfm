@@ -223,6 +223,7 @@ void BundlerApp::ProcessOptions(int argc, char **argv)
 	    {"run_bundle",   0, 0, 'r'},
 	    {"rerun_bundle", 0, 0, 'j'},
 	    {"slow_bundle",  0, 0, 'D'},
+		{"get_params", 0, 0, 'g'},
 
 #ifdef __USE_CERES__
             {"use_ceres",    0, 0, 371},
@@ -349,6 +350,11 @@ void BundlerApp::ProcessOptions(int argc, char **argv)
 		PrintUsage();
 		exit(0);
 		break;
+
+		case 'g':
+			m_get_params = true;
+		break;
+
 
 	    case 'f':
 		m_fisheye = true;
@@ -960,7 +966,7 @@ bool BundlerApp::OnInit()
         }
         
 #define MIN_POINT_VIEWS 3 // 0 // 2
-        if (!m_run_bundle) {
+        if (!m_run_bundle && !m_get_params) {
             SetMatchesFromPoints(MIN_POINT_VIEWS);
 
             printf("[BundlerApp::OnInit] "
@@ -992,7 +998,7 @@ bool BundlerApp::OnInit()
 #endif
         }
 
-        if (m_add_image_file != NULL) {
+		if (m_add_image_file != NULL) {
             printf("[BundlerApp::OnInit] Adding additional images...\n");
             FILE *f = fopen(m_add_image_file, "r");
 
@@ -1023,6 +1029,14 @@ bool BundlerApp::OnInit()
 
 #endif /* __DEMO__ */
     }
+
+	if(m_get_params)
+	{
+		assert(m_bundle_provided && m_add_image_file);
+		ReRunSFM();
+//		BundleGetParams();
+		exit(0);
+	}
 
     if (m_run_bundle) {
 #ifndef __DEMO__
