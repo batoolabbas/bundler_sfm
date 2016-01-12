@@ -57,12 +57,13 @@ int ReadFileList(char* list_in, std::vector<std::string>& key_files) {
 }
 
 int main(int argc, char **argv) {
-    char *list_in;
+    char *list_in, *new_list_in;
     char *file_out;
     double ratio;
+	int startIndex = 0;
 
-    if (argc != 3 && argc != 4) {
-        printf("Usage: %s <list.txt> <outfile> [window_radius]\n", argv[0]);
+    if (argc < 3 || argc >5) {
+        printf("Usage: %s <list.txt> <outfile> [window_radius] [inputfile]\n", argv[0]);
         return EXIT_FAILURE;
     }
 
@@ -71,7 +72,7 @@ int main(int argc, char **argv) {
     file_out = argv[2];
 
     int window_radius = -1;
-    if (argc == 4) {
+    if (argc >= 4) {
         window_radius = atoi(argv[3]);
     }
 
@@ -80,46 +81,84 @@ int main(int argc, char **argv) {
     /* Read the list of files */
     std::vector<std::string> key_files;
     if (ReadFileList(list_in, key_files) != 0) return EXIT_FAILURE;
+	int init_images = (int) key_files.size();
 
     FILE *f;
-    if ((f = fopen(file_out, "w")) == NULL) {
-        printf("Could not open %s for writing.\n", file_out);
-        return EXIT_FAILURE;
-    }
 
-    int num_images = (int) key_files.size();
+	if(argc==5)
+	{
+		new_list_in = argv[4];
+
+		if(ReadFileList(new_list_in, key_files)!=0) return EXIT_FAILURE;
+
+		if ((f = fopen(file_out, "a")) == NULL) {
+		  printf("Could not open %s for writing.\n", file_out);
+		  return EXIT_FAILURE;
+		}
+
+		startIndex = init_images;
+
+	}
+	else if ((f = fopen(file_out, "w")) == NULL) {
+	        printf("Could not open %s for writing.\n", file_out);
+		    return EXIT_FAILURE;
+	}
+
+
+	int num_images = (int) key_files.size();
 
     std::vector<unsigned char*> keys(num_images);
-    std::vector<int> num_keys(num_images);
+    std::vector<int> num_keys(num_images,-1);
 
     /* Read all keys */
-    for (int i = 0; i < num_images; i++) {
-        keys[i] = NULL;
-        num_keys[i] = ReadKeyFile(key_files[i].c_str(), &keys[i]);
-    }
+	//for (int i = 0; i < num_images; i++) {
+ //       keys[i] = NULL;
+ //       num_keys[i] = ReadKeyFile(key_files[i].c_str(), &keys[i]);
+	//	printf("[KeyMatchFull] Reading keys for image %d\n", i);
+ //   }
 
     clock_t end = clock();
     printf("[KeyMatchFull] Reading keys took %0.3fs\n", 
            (end - start) / ((double) CLOCKS_PER_SEC));
 
-    for (int i = 0; i < num_images; i++) {
-        if (num_keys[i] == 0)
+	for (int i = startIndex; i < num_images; i++) {
+        if(num_keys[i]==-1)
+		{
+			keys[i] = NULL;
+			num_keys[i] = ReadKeyFile(key_files[i].c_str(), &keys[i]);
+			printf("[KeyMatchFull] Reading keys for image %d\n", i);
+		}
+		
+		if (num_keys[i] == 0)
             continue;
 
         printf("[KeyMatchFull] Matching to image %d\n", i);
 
         start = clock();
-
+		
         /* Create a tree from the keys */
         ANNkd_tree *tree = CreateSearchTree(num_keys[i], keys[i]);
 
         /* Compute the start index */
-        int start_idx = 0;
+
+		int start_idx = 0;
+		
+		if(i==278)
+			start_idx=206;
+
         if (window_radius > 0) 
             start_idx = std::max(i - window_radius, 0);
 
         for (int j = start_idx; j < i; j++) {
-            if (num_keys[j] == 0)
+           
+			if(num_keys[j]==-1)
+			{
+				keys[j] = NULL;
+				num_keys[j] = ReadKeyFile(key_files[j].c_str(), &keys[j]);
+				printf("[KeyMatchFull] Reading keys for image %d\n", j);
+			}
+
+			 if (num_keys[j] == 0)
                 continue;
 
             /* Compute likely matches between two sets of keypoints */
