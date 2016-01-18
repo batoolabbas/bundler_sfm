@@ -544,15 +544,15 @@ void BundlerApp::CoalesceFeatureDescriptors()
 
     int num_images = GetNumImages();
     for (int i = 0; i < num_images; i++) {
-	if (!m_image_data[i].m_camera.m_adjusted)
-	    continue;
+
+	//if (!m_image_data[i].m_camera.m_adjusted)
+	 //   continue;
 
 	printf("[CoalesceFeatureDescriptors] Adding features from "
 	       "image %d\n", i);
         fflush(stdout);
 
 	m_image_data[i].LoadKeys(true);
-
 	for (int j = 0; j < num_points; j++) {
 	    int num_views = (int) m_point_data[j].m_views.size();
 	    int key_seen = -1;

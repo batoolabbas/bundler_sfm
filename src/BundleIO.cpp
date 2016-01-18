@@ -24,7 +24,7 @@
 #include <stdlib.h>
 #include <time.h>
 
-#include "BaseApp.h"
+#include "BundlerApp.h"
 #include "LoadJPEG.h"
 #include "SifterUtil.h"
 
@@ -117,7 +117,7 @@ void BaseApp::LoadMatchTable(const char *filename) {
 
     /* Set all matches to false */
     // ClearMatches();
-    RemoveAllMatches();
+//    RemoveAllMatches();
 
     FILE *f = fopen(filename, "r");
 
@@ -134,6 +134,7 @@ void BaseApp::LoadMatchTable(const char *filename) {
         sscanf(buf, "%d %d\n", &i1, &i2);
 
         SetMatch(i1, i2);
+		SetMatch(i2,i1);
 
         /* Read the number of matches */
         int nMatches;
@@ -150,12 +151,18 @@ void BaseApp::LoadMatchTable(const char *filename) {
                 continue;
 #endif /* KEY_LIMIT */
 
-            KeypointMatch m;
+            KeypointMatch m, n;
 
             m.m_idx1 = k1;
             m.m_idx2 = k2;
 		    
+			n.m_idx1 = k2;
+			n.m_idx2 = k1;
+
             matches.push_back(m);
+
+			MatchIndex rev_idx = GetMatchIndex(i2, i1);
+			m_matches.AddMatch(rev_idx,n);
         }
 
         MatchIndex idx = GetMatchIndex(i1, i2);
@@ -279,6 +286,23 @@ void BaseApp::LoadMatches() {
     PruneDoubleMatches();
 
     m_matches_loaded = true;
+}
+
+void BaseApp::LoadAddMatches()
+{
+	if (!m_matches_loaded)
+    {
+		 LoadMatchTable(m_match_table);
+	}
+
+	if (m_add_matches_loaded)
+		return;  /* we already loaded the matches */
+
+	LoadMatchTable(m_add_match_directory);
+
+    PruneDoubleMatches();
+	m_matches_loaded = true;
+    m_add_matches_loaded = true;
 }
 
 void BaseApp::RemoveAllMatches() 
@@ -516,7 +540,7 @@ void BaseApp::ReadBundleFile(const char *filename)
     /* Read points */
     m_point_data.clear();
     m_point_data.resize(num_points);
-
+	std::vector<TrackData> tracks;
     int num_min_views_points = 0;
     for (int i = 0; i < num_points; i++) {
         PointData &pt = m_point_data[i];
@@ -537,31 +561,36 @@ void BaseApp::ReadBundleFile(const char *filename)
 		pt.m_num_vis=num_visible;
         if (num_visible >=3)
             num_min_views_points++;
-
         // pt.m_views.resize(num_visible);
         for (int j = 0; j < num_visible; j++) {
             int view, key;
             fscanf(f, "%d %d", &view, &key);
+			
+            //if (!m_image_data[view].m_camera.m_adjusted) {
+            //    // printf("[ReadBundleFile] "
+            //    //        "Removing view %d from point %d\n", view, i);
+            //} else {
+            //    /* Check cheirality */
+            //    bool val = (m_bundle_version >= 0.3);
 
-            if (!m_image_data[view].m_camera.m_adjusted) {
-                // printf("[ReadBundleFile] "
-                //        "Removing view %d from point %d\n", view, i);
-            } else {
-                /* Check cheirality */
-                bool val = (m_bundle_version >= 0.3);
-
-                double proj_test[2];
-                if (m_image_data[view].m_camera.
-                    Project(pt.m_pos, proj_test) == val) {
+            //    double proj_test[2];
+            //    if (m_image_data[view].m_camera.
+            //        Project(pt.m_pos, proj_test) == val) {
                     
                     pt.m_views.push_back(ImageKey(view, key));
-                } else {
-                    printf("[ReadBundleFile] "
-                           "Removing view %d from point %d [cheirality]\n", 
-                               view, i);
-                    // pt.m_views.push_back(ImageKey(view, key));
-                }   
-            }
+					m_image_data[view].m_visible_points.push_back(i);
+					m_image_data[view].m_visible_keys.push_back(key);
+					if(m_image_data[view].m_track_flags.size()<key)
+						m_image_data[view].m_track_flags.resize(key*2+1);
+
+					m_image_data[view].m_track_flags[key] = true;
+            //    } else {
+            //        printf("[ReadBundleFile] "
+            //               "Removing view %d from point %d [cheirality]\n", 
+            //                   view, i);
+            //        // pt.m_views.push_back(ImageKey(view, key));
+            //    }   
+            //}
             // pt.m_views.push_back(ImageKey(view, key));
             
             if (m_bundle_version >= 0.3) {
@@ -569,6 +598,8 @@ void BaseApp::ReadBundleFile(const char *filename)
                 fscanf(f, "%lf %lf", &x, &y);
             }
         }
+		
+		tracks.push_back(pt.m_views);
 
         // #define CROP_POINT_CLOUD
 #ifdef CROP_POINT_CLOUD
@@ -602,7 +633,9 @@ void BaseApp::ReadBundleFile(const char *filename)
 
     fclose(f);
 
-    printf("[ReadBundleFile] %d / %d points visible to more than 2 cameras!\n", 
+	m_track_data = tracks;
+
+    printf("[ReadBundleFile] %d / %d points visible to more than 3 cameras!\n", 
         num_min_views_points, num_points);
 }
 

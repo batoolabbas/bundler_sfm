@@ -312,3 +312,216 @@ void BundlerApp::ComputeTracks(int new_image_start)
     fflush(stdout);
 }
 #undef LARGE_NUMBER
+
+void BundlerApp::ComputeAddTracks(int new_image_start) 
+{
+    unsigned int num_images = GetNumImages();
+
+    int pt_idx = 0;
+
+    std::vector<TrackData> tracks;
+
+    /* Sort all match lists */
+    for (unsigned int i = 0; i < num_images; i++) {
+        MatchAdjList::iterator iter;
+        for (iter = m_matches.Begin(i); iter != m_matches.End(i); iter++) {
+            // MatchIndex idx = *iter;
+            std::vector<KeypointMatch> &list = iter->m_match_list; // iter->second; // m_match_lists[idx];
+            sort(list.begin(), list.end(), CompareFirst);
+        }
+    }
+
+    bool *img_marked = new bool[num_images];
+    memset(img_marked, 0, num_images * sizeof(bool));
+
+    std::vector<int> touched;
+    touched.reserve(num_images);
+
+	for (unsigned int i = new_image_start; i < num_images; i++) {
+		int num_features = m_image_data[i].GetNumKeys(); // GetNumKeys(i);
+
+			/* If this image has no neighbors, skip it */
+			// std::list<unsigned int> &nbrs = m_matches.GetNeighbors(i);
+			// int num_nbrs = (int) nbrs.size();
+			int num_nbrs = (int) m_matches.GetNumNeighbors(i);
+
+			if (num_nbrs == 0)
+				continue;
+
+		for (int j = 0; j < num_features; j++) {
+			ImageKeyVector features;
+			std::queue<ImageKey> features_queue;
+
+			/* Check if this feature was visited */
+			// if (GetKey(i,j).m_extra >= 0)
+				//      continue;
+			if (m_image_data[i].m_key_flags[j])
+				continue; // already visited this feature
+
+				// memset(img_marked, 0, num_images * sizeof(bool));
+				/* Reset flags */
+			int num_touched = touched.size();
+			for (int k = 0; k < num_touched; k++)
+				img_marked[touched[k]] = false;
+			touched.clear();
+
+			/* Do a breadth first search given this feature */
+			// GetKey(i,j).m_extra = pt_idx;
+			m_image_data[i].m_key_flags[j] = true;
+
+			features.push_back(ImageKey(i, j));
+			features_queue.push(ImageKey(i, j));
+
+			img_marked[i] = true;
+			touched.push_back(i);
+
+			int num_rounds = 0;
+			while (!features_queue.empty()) {
+				num_rounds++;
+
+				ImageKey feature = features_queue.front();
+				features_queue.pop();
+		
+				int img1 = feature.first;
+				int f1 = feature.second;
+				KeypointMatch dummy;
+				dummy.m_idx1 = f1;
+
+				int start_idx=img1;
+				/* Limit new images to point only to other new images */
+				/*if (img1 >= new_image_start) {
+					start_idx = new_image_start;
+				} else {
+					start_idx = img1;
+				}*/
+
+				// for (unsigned int k = start_idx; k < num_images; k++) {
+				/* Check all adjacent images */
+					// std::list<unsigned int> &nbrs = m_matches.GetNeighbors(img1);
+					// int num_nbrs = (int) nbrs.size();
+				MatchAdjList &nbrs = m_matches.GetNeighbors(start_idx);
+
+					// std::list<unsigned int>::iterator iter;
+				MatchAdjList::iterator iter;
+				for (iter = nbrs.begin(); iter != nbrs.end(); iter++) {
+						// for (int nbr = 0; nbr < num_nbrs; nbr++) {
+					unsigned int k = iter->m_index; // *iter; // nbrs[nbr];
+
+					if (img_marked[k] || !m_image_data[k].m_camera.m_adjusted)
+						continue;
+
+				/* Skip non-matching images */
+				// if (!ImagesMatch(img1, k))
+						//     continue;
+
+					MatchIndex base = GetMatchIndex(start_idx, k);
+
+					std::vector<KeypointMatch> &list = m_matches.GetMatchList(base); // m_match_lists[base];
+
+						/* Do a binary search for the feature */
+					std::pair<std::vector<KeypointMatch>::iterator, std::vector<KeypointMatch>::iterator> p;
+
+					p = equal_range(list.begin(), list.end(),dummy, CompareFirst);
+
+					if (p.first == p.second)
+						continue;  /* not found */
+
+					assert((p.first)->m_idx1 == f1);
+					int idx2 = (p.first)->m_idx2;
+			    
+					/* Check if we visited this point already */
+					// if (GetKey(k,idx2).m_extra >= 0)
+					//     continue;
+					assert(idx2 < m_image_data[k].GetNumKeys());
+
+					if(m_image_data[k].m_key_flags[idx2])
+						continue;
+					
+					if (m_image_data[k].m_track_flags[idx2])
+					{
+						vector<int> &keys = m_image_data[k].m_visible_keys;
+						auto it = find(keys.begin(),keys.end(),idx2);
+						if(it!=keys.end())
+						{
+							int ptidx = it-keys.begin();
+							m_track_data[m_image_data[k].m_visible_points[ptidx]].m_views.push_back(ImageKey(i,j));
+							m_point_data[m_image_data[k].m_visible_points[ptidx]].m_views.push_back(ImageKey(i,j));
+						}
+						else
+						{
+							printf("Not working as expected");
+						}
+					}
+					else
+					{
+						/* Mark and push the point */
+						// GetKey(k,idx2).m_extra = pt_idx;
+						
+						features.push_back(ImageKey(k, idx2));
+	
+						if(k>=new_image_start)
+							features_queue.push(ImageKey(k, idx2));
+					}
+					m_image_data[k].m_key_flags[idx2] = true;
+					img_marked[k] = true;					
+					touched.push_back(k);
+				}
+			} /* while loop */
+
+
+			if (features.size() >= 2) {
+				printf("Point with %d projections found\n", 
+							   //  (%d inconsistent)\n",
+					   (int) features.size()); // , num_inconsistent);
+				fflush(stdout);
+
+				tracks.push_back(TrackData(features));
+
+				pt_idx++;
+			} else {
+			// printf("Feature only has %d points (%d inconsistent)\n", 
+			//       (int) features.size(), num_inconsistent);
+			}
+
+		} /* for loop over features */
+    } /* for loop over images */
+
+    printf("[ComputeTracks] Found %d points\n", pt_idx);
+    fflush(stdout);
+
+    if (pt_idx != (int) tracks.size()) {
+		printf("[ComputeTracks] Error: point count "
+	       "inconsistent!\n");
+		fflush(stdout);
+    }
+
+    /* Clear match lists */
+    printf("[ComputeTracks] Clearing match lists...\n");
+    fflush(stdout);
+
+    RemoveAllMatches();
+
+    /* Create the new consistent match lists */
+    printf("[ComputeTracks] Creating consistent match lists...\n");
+    fflush(stdout);
+
+    int num_pts = pt_idx;
+
+    for (int i = 0; i < num_pts; i++) {
+		int num_features = (int) tracks[i].m_views.size();
+
+		for (int j = 0; j < num_features; j++) {
+			int img1 = tracks[i].m_views[j].first;
+			int key1 = tracks[i].m_views[j].second;
+
+			m_image_data[img1].m_visible_points.push_back(i);
+			m_image_data[img1].m_visible_keys.push_back(key1);
+		}        
+    }
+
+    /* Save the tracks */
+    m_track_data = tracks;
+
+    printf("[ComputeTracks] Done!\n");
+    fflush(stdout);
+}

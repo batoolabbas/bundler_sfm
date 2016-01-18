@@ -92,6 +92,7 @@ public:
         m_match_directory = ".";
         m_match_index_dir = NULL;
         m_match_table = NULL;
+		m_add_match_directory = NULL;
         m_key_directory = ".";
         m_image_directory = ".";
         m_output_directory = ".";
@@ -101,6 +102,7 @@ public:
         m_ann_max_pts_visit = 400;
         
         m_matches_loaded = false;
+		m_add_matches_loaded = false;
         m_features_coalesced = false;
 
         m_assemble = false;
@@ -192,6 +194,8 @@ public:
 
     /* Compute a set of tracks that explain the matches */
     void ComputeTracks(int new_image_start = 0);
+
+	void ComputeAddTracks(int new_image_start=0);
 
     /* Compute geometric information about image pairs */
     void ComputeGeometricConstraints(bool overwrite = false, 
@@ -426,7 +430,7 @@ public:
                                camera_params_t &camera2);
 
     /* Register a new image with the existing model */
-    bool BundleRegisterImage(ImageData &data, bool init_location);
+    bool BundleRegisterImage(int image_idx, bool init_location);
     void RunBundleServer();
 
 

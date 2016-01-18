@@ -36,6 +36,7 @@
 #include "util.h"
 
 #include "BundlerApp.h"
+#include "BaseApp.h"
 // #include "SifterGraph.h"
 #include "BundleAdd.h"
 #include "Epipolar.h"
@@ -1569,7 +1570,7 @@ std::vector<ImagePair> BundlerApp::FindCamerasWithNMatches(int n,
     return image_pairs;
 }
 
-#define MIN_INLIERS_EST_PROJECTION 6 /* 7 */ /* 30 */ /* This constant needs
+#define MIN_INLIERS_EST_PROJECTION 5 /* 6 */ /* 7 */ /* 30 */ /* This constant needs
 * adjustment */
 #define INIT_REPROJECTION_ERROR 16.0 /* 6.0 */ /* 8.0 */
 
@@ -2897,10 +2898,10 @@ bool FindAndVerifyCamera(int num_points, v3_t *points_solve, v2_t *projs_solve,
     double P[12];
     int r = -1;
 
-    if (num_points >= 9) {
+    if (num_points >= 6) {
         r = find_projection_3x4_ransac(num_points, 
             points_solve, projs_solve, 
-            P, /* 2048 */ 4096 /* 100000 */, 
+            P, /* 2048 */4096/* 100000 */, 
             proj_estimation_threshold);
     }
 
@@ -3608,11 +3609,11 @@ void BundlerApp::BundleImage(char *filename, int parent_img)
         m_image_data[parent_img].m_camera.GetPosition(pos);
         memcpy(data.m_drop_pt, pos, 3 * sizeof(double));
 
-        BundleRegisterImage(data, true);
+ //       BundleRegisterImage(data, true);
     } else {
         // CoalesceFeatureDescriptors();
         // CoalesceFeatureDescriptorsMedian();
-        BundleRegisterImage(data, false);	
+ //       BundleRegisterImage(data, false);	
     }
 
     data.WriteCamera();
@@ -3627,7 +3628,7 @@ void BundlerApp::BundleImagesFromFile(FILE *f)
     if (!m_add_images_fast)
         CoalesceFeatureDescriptors();
     // CoalesceFeatureDescriptorsMedian();
-
+	int img_idx = (int) m_image_data.size();
     while (fgets(buf, 256, f)) {
         ImageData data;
 
@@ -3635,30 +3636,39 @@ void BundlerApp::BundleImagesFromFile(FILE *f)
         data.m_licensed = true;
 
         /* Read or produce the data */
-        int img_idx = (int) m_image_data.size();
-
         if (data.ReadCamera() && data.ReadTracks(img_idx, m_point_data)) {
             m_image_data.push_back(data);
-        } else if (!m_add_images_fast && BundleRegisterImage(data, false)) {
-            data.WriteCamera();
-            data.WriteTracks();
+        } else
+			{   printf("[BundleRegisterImage] Registering [%dx%d] image\n",
+			  data.GetWidth(), data.GetHeight());
 
-            int num_keys = data.m_keys.size();
-            int img_idx = (int) m_image_data.size();
+		/* Read the keys for this image */
+			data.LoadOrExtractKeys(m_sift_binary, !m_optimize_for_fisheye);
 
-            /* Add views */
-            for (int i = 0; i < num_keys; i++) {
-                if (data.m_keys[i].m_extra != -1) {
-                    int pt_idx = data.m_keys[i].m_extra;
-                    m_point_data[pt_idx].
-                        m_views.push_back(ImageKey(img_idx, i));
-                }
-            }
-
-            data.UnloadKeys();
+		    if ((int) data.m_keys_desc.size() == 0) {
+				printf("[BundleRegisterImage] "
+				"Error: image has no keypoints\n");
+				continue;
+			}
+            //data.UnloadKeys();
             m_image_data.push_back(data);
         }
     }
+	m_matches = MatchTable(m_image_data.size());
+	for(int img=img_idx;img<m_image_data.size();img++)
+	{
+		BundleRegisterImage(img, false);
+		ImageData &data = m_image_data[img];
+		int num_keys = data.m_keys.size();
+		/* Add views */
+		for (int i = 0; i < num_keys; i++) {
+			if (data.m_keys[i].m_extra != -1) {
+				int pt_idx = data.m_keys[i].m_extra;
+				m_point_data[pt_idx].m_views.push_back(ImageKey(img_idx, i));
+			}
+		}
+	}
+
 }
 
 std::vector<KeypointMatch> 
@@ -3689,25 +3699,15 @@ RemoveDuplicateMatches(const std::vector<KeypointMatch> &matches)
 }
 
 /* Register a new image with the existing model */
-bool BundlerApp::BundleRegisterImage(ImageData &data, bool init_location)
+bool BundlerApp::BundleRegisterImage(int image_idx, bool init_location)
 {
-    printf("[BundleRegisterImage] Registering [%dx%d] image\n",
-	   data.GetWidth(), data.GetHeight());
-
-    /* Read the keys for this image */
-    data.LoadOrExtractKeys(m_sift_binary, !m_optimize_for_fisheye);
-
-    if ((int) data.m_keys_desc.size() == 0) {
-        printf("[BundleRegisterImage] "
-	       "Error: image has no keypoints\n");
-        return false;
-    }
 
     clock_t start = clock();
 
+	ImageData &data=m_image_data[image_idx];
     /* **** Connect the new camera to any existing points **** */
     int num_pts_solve = 0;
-    int num_keys = (int) data.m_keys_desc.size();
+	int num_keys = (int) data.m_keys_desc.size();
     v3_t *points_solve = new v3_t[num_keys];
     v2_t *projs_solve = new v2_t[num_keys];
     int *idxs_solve = new int[num_keys];
@@ -3716,283 +3716,99 @@ bool BundlerApp::BundleRegisterImage(ImageData &data, bool init_location)
     for (int i = 0; i < num_keys; i++)
         data.m_keys_desc[i].m_extra = -1;
 
-    if (init_location) {
-        /* Find the closest registered cameras to this image */
-#ifdef __USE_ANN__
-        ANNkd_tree *tree = CreateCameraSearchTree();
-#else
-        BruteForceSearch *search = CreateCameraSearchTree();
-#endif    
+	std::vector<KeypointMatch> matches;
+	if(m_add_match_directory == NULL)
+    {
+			matches = MatchPointsToKeys(data.m_keys_desc, 0.7);
+			matches = RemoveDuplicateMatches(matches);
+	}
+	else
+	{
+		if(!m_add_matches_loaded){
+			LoadAddMatches();
+//			MakeMatchListsSymmetric();
+			ComputeAddTracks(image_idx);
+			//RemoveAllMatches();
+			//int num_tracks = (int) m_track_data.size();
+			//int num_images = GetNumImages();
+			//for (int i = 0; i < num_tracks; i++) {
+			//	TrackData &track = m_track_data[i];
+			//	int num_views = (int) track.m_views.size();
 
-#define NUM_NNS 20
-        int nn_idxs[NUM_NNS];
+			//	for (int j = 0; j < num_views; j++) {
+			//		int img1 = track.m_views[j].first;
 
-        v3_t q = 
-            v3_new(data.m_drop_pt[0], data.m_drop_pt[1], data.m_drop_pt[2]);
-#ifdef __USE_ANN__
-        float dists[NUM_NNS];
-        // query_ann_tree_3D_idx(tree, q, 0.0, NUM_NNS, nn_idxs, dists);
-        float query[3] = { Vx(q), Vy(q), Vz(q) };
-        tree->annkPriSearch(query, NUM_NNS, nn_idxs, dists, 0.0);
-#else
-        double dists[NUM_NNS];
-        search->GetClosestPoints(q, NUM_NNS, nn_idxs, dists);
-#endif
+			//		//assert(img1 >= 0 && img1 < num_images);
 
-        /* Initialize point indices to -1 */
-        printf("[BundleRegisterImage] Initializing indices...\n");
-        for (int i = 0; i < NUM_NNS; i++) {
-            int cam_idx = GetRegisteredCameraIndex(nn_idxs[i]);
+			//		for (int k = j+1; k < num_views; k++) {
+			//			int img2 = track.m_views[k].first;
 
-            printf("NN[%d] = %d\n", i, cam_idx);
+			//			//assert(img2 >= 0 && img2 < num_images);
+   //                 
+			//			SetMatch(img1, img2);
+			//			SetMatch(img2, img1);
+			//		}
+			//	}
+			//}
 
-            m_image_data[cam_idx].LoadKeys(true, !m_optimize_for_fisheye);
 
-            int num_keys2 = (int) m_image_data[cam_idx].m_keys.size();
-            for (int j = 0; j < num_keys2; j++) {
-                m_image_data[cam_idx].m_keys_desc[j].m_extra = -1;
-            }
-        }
+		}
+		//matches.push_back(KeypointMatch(pointID, keyID));
+		for(int i=0;i<data.m_visible_points.size();i++)
+			matches.push_back(KeypointMatch(data.m_visible_points[i],data.m_visible_keys[i]));
 
-#if 1
-        /* Set the point indices */
-        printf("[BundleRegisterImage] Set point indices...\n");
+	}
 
-        for (int i = 0; i < NUM_NNS; i++) {
-            int cam_idx = GetRegisteredCameraIndex(nn_idxs[i]);
-            int num_visible_points = 
-                m_image_data[cam_idx].m_visible_points.size();
 
-            for (int j = 0; j < num_visible_points; j++) {
-                int pt_idx = m_image_data[cam_idx].m_visible_points[j];
+    num_pts_solve = (int) matches.size();
+    printf("[BundleRegisterImage] Found %d matches\n", num_pts_solve);
 
-                int num_views = m_point_data[pt_idx].m_views.size();
-                for (int k = 0; k < num_views; k++) {
-                    int img = m_point_data[pt_idx].m_views[k].first;
+    delete [] points_solve;
+    delete [] projs_solve;
+    delete [] idxs_solve;
+    delete [] keys_solve;
 
-                    if (img == cam_idx) {
-                        int key_idx = m_point_data[pt_idx].m_views[k].second;
-                        GetKey(cam_idx, key_idx).m_extra = pt_idx;
-                    }
-                }
-            }
-        }
-#else
-        for (int i = 0; i < (int) m_point_data.size(); i++) {
-            for (int j = 0; j < (int) m_point_data[i].m_views.size(); j++) {
-                ImageKey p = m_point_data[i].m_views[j];
+    points_solve = new v3_t[num_pts_solve];
+    projs_solve = new v2_t[num_pts_solve];
+    idxs_solve = new int[num_pts_solve];
+    keys_solve = new int[num_pts_solve];
 
-                for (int k = 0; k < NUM_NNS; k++) {
-                    int cam_idx = GetRegisteredCameraIndex(nn_idxs[k]);
-
-                    if (cam_idx == p.first)
-                        GetKey(p.first,p.second).m_extra = i;
-                }
-            }
-        }
-#endif
-
-        /* Match the new keys to each of the nearby images */
-        printf("[BundleRegisterImage] Matching images...\n");
-
-        typedef std::vector<KeypointMatch> KeypointMatchList;
-        std::vector<KeypointMatchList> match_lists;
-
-        for (int i = 0; i < NUM_NNS; i++) {
-            int cam_idx = GetRegisteredCameraIndex(nn_idxs[i]);
-
-            printf("[BundleRegisterImage] "
-		   "Comparing to image %d...\n",
-		   cam_idx);
-
-            // m_image_data[cam_idx].LoadKeys();
-
-            KeypointMatchList matches;
-            matches = 
-                MatchKeys(data.m_keys_desc, 
-                m_image_data[cam_idx].m_keys_desc, 
-                true, 0.75);
-
-            KeypointMatchList matches_sym;
-            matches_sym = 
-                MatchKeys(m_image_data[cam_idx].m_keys_desc, 
-                data.m_keys_desc,
-                false, 1.0);
-
-            if (matches_sym.size() != m_image_data[cam_idx].m_keys_desc.size())
-                printf("Error: not enough matches\n");
-
-            /* Prune asymmetric matches */
-            KeypointMatchList matches_new;
-            for (int j = 0; j < (int) matches.size(); j++) {
-                int idx1 = matches[j].m_idx1;
-                int idx2 = matches[j].m_idx2;
-
-                if (matches_sym[idx2].m_idx2 != idx1)
-                    continue;
-
-                matches_new.push_back(matches[j]);
-            }
-
-            matches = matches_new;
-
-            /* Remove duplicates */
-            printf("Found %d matches [before pruning]\n", 
-		   (int) matches.size());
-
-            matches = RemoveDuplicateMatches(matches);
-            printf("Found %d matches [after pruning]\n", 
-		   (int) matches.size());
-
-            /* Estimate a fundamental matrix */
-            double F[9];
-            std::vector<int> inliers = 
-                EstimateFMatrix(data.m_keys_desc, 
-                m_image_data[cam_idx].m_keys_desc, 
-                matches, 
-                m_fmatrix_rounds, m_fmatrix_threshold, F);
-
-            int num_inliers = (int) inliers.size();
-            printf("Inliers[%d] = %d out of %d\n", 
-		   cam_idx, num_inliers, (int) matches.size());
-
-            /* Refine the matches */
-            KeypointMatchList new_matches;
-
-            for (int i = 0; i < num_inliers; i++) {
-                new_matches.push_back(matches[inliers[i]]);
-            }
-
-            match_lists.push_back(new_matches);
-
-            fflush(stdout);
-        }
-
-        /* Now, set up the data structures for bundle adjustment */
-        int curr_num_pts = (int) m_point_data.size();
-
-        int *saw = new int[curr_num_pts];
-        for (int i = 0; i < curr_num_pts; i++) {
-            saw[i] = 0;
-        }
-
-        printf("[BundleRegisterImage] "
-	       "Connecting existing matches...\n");
-
-        for (int i = 0; i < NUM_NNS; i++) {
-            int other = GetRegisteredCameraIndex(nn_idxs[i]);
-
-            for (int j = 0; j < (int) match_lists[i].size(); j++) {
-                int idx1 = match_lists[i][j].m_idx1;
-                int idx2 = match_lists[i][j].m_idx2;
-
-                if (GetKey(other,idx2).m_extra < 0) {
-                    continue;
-                } else {
-                    int pt_idx = GetKey(other,idx2).m_extra;
-
-                    if (saw[pt_idx] == 1)
-                        continue;
-
-                    saw[pt_idx] = 1;
-
-                    printf("  Connecting existing point "
-			   "%d => %d [%d] (cam: %d)\n", 
-			   idx1, idx2, pt_idx, other);
-
-                    /* This is an old point */
-                    data.m_keys_desc[idx1].m_extra = pt_idx;
-
-                    /* Add the point to the set we'll use to solve for
-                    * the camera position */
-                    double *pt = m_point_data[pt_idx].m_pos;
-
-                    points_solve[num_pts_solve] = 
-                        v3_new(pt[0], pt[1], pt[2]);
-
-                    if (m_optimize_for_fisheye) {
-                        double x = data.m_keys_desc[idx1].m_x;
-                        double y = data.m_keys_desc[idx1].m_y;
-                        double x_u, y_u;
-                        m_image_data[idx1].UndistortPoint(x, y, x_u, y_u);
-                        projs_solve[num_pts_solve] = v2_new(x_u, y_u);
-                    } else {
-                        projs_solve[num_pts_solve] = 
-                            v2_new(data.m_keys_desc[idx1].m_x, 
-                            data.m_keys_desc[idx1].m_y);
-                    }
-
-                    idxs_solve[num_pts_solve] = pt_idx;
-                    keys_solve[num_pts_solve] = idx1;
-
-                    num_pts_solve++;
-                }
-            }
-        }
-
-        fflush(stdout);
-
-        delete [] saw;
-
-#ifdef __USE_ANN__
-        delete tree;
-#else
-        delete search;
-#endif
-    } else { /* !init_location */
-        /* Match keys to all points */
+    for (int i = 0; i < num_pts_solve; i++) {
 #if 0
-        std::vector<KeypointMatch> matches = 
-            MatchKeysToPoints(data.m_keys, 0.6);
+        int key_idx = matches[i].m_idx1;
+        int pt_idx = matches[i].m_idx2;
 #else
-        std::vector<KeypointMatch> matches = 
-            MatchPointsToKeys(data.m_keys_desc, 0.7);
+        int key_idx = matches[i].m_idx2;
+        int pt_idx = matches[i].m_idx1;
 #endif
 
-        matches = RemoveDuplicateMatches(matches);
+		//for (int pts=0;pts<m_point_data[pt_idx].m_views.size();pts++)
+		//{
+		//	int img_idx = m_point_data[pt_idx].m_views[pts].first;
+		//	SetMatch(img_idx, m_image_data.size());
+		//	MatchIndex idx = GetMatchIndex(img_idx, m_image_data.size());
+		//	m_matches.GetMatchList(idx) = matches;
 
-        num_pts_solve = (int) matches.size();
-        printf("[BundleRegisterImage] Found %d matches\n",
-	       num_pts_solve);
+		//}
 
-        delete [] points_solve;
-        delete [] projs_solve;
-        delete [] idxs_solve;
-        delete [] keys_solve;
+        const PointData &pt = m_point_data[pt_idx];
 
-        points_solve = new v3_t[num_pts_solve];
-        projs_solve = new v2_t[num_pts_solve];
-        idxs_solve = new int[num_pts_solve];
-        keys_solve = new int[num_pts_solve];
+        points_solve[i] = v3_new(pt.m_pos[0], pt.m_pos[1], pt.m_pos[2]);
 
-        for (int i = 0; i < num_pts_solve; i++) {
-#if 0
-            int key_idx = matches[i].m_idx1;
-            int pt_idx = matches[i].m_idx2;
-#else
-            int key_idx = matches[i].m_idx2;
-            int pt_idx = matches[i].m_idx1;
-#endif
-
-            const PointData &pt = m_point_data[pt_idx];
-
-            points_solve[i] = v3_new(pt.m_pos[0], pt.m_pos[1], pt.m_pos[2]);
-
-            if (m_optimize_for_fisheye) {
-                double x = data.m_keys_desc[key_idx].m_x;
-                double y = data.m_keys_desc[key_idx].m_y;
-                double x_u, y_u;
-                data.UndistortPoint(x, y, x_u, y_u);
-                projs_solve[i] = v2_new(x_u, y_u);
-            } else {
-                projs_solve[i] = 
-                    v2_new(data.m_keys_desc[key_idx].m_x, 
-                    data.m_keys_desc[key_idx].m_y);
-            }
-
-            keys_solve[i] = key_idx;
-            idxs_solve[i] = pt_idx;
+        if (m_optimize_for_fisheye) {
+            double x = data.m_keys_desc[key_idx].m_x;
+            double y = data.m_keys_desc[key_idx].m_y;
+            double x_u, y_u;
+            data.UndistortPoint(x, y, x_u, y_u);
+            projs_solve[i] = v2_new(x_u, y_u);
+        } else {
+            projs_solve[i] = 
+                v2_new(data.m_keys_desc[key_idx].m_x, 
+                data.m_keys_desc[key_idx].m_y);
         }
+
+        keys_solve[i] = key_idx;
+        idxs_solve[i] = pt_idx;
     }
 
     /* **** Solve for the camera position **** */
@@ -4008,10 +3824,8 @@ bool BundlerApp::BundleRegisterImage(ImageData &data, bool init_location)
         FindAndVerifyCamera(num_pts_solve, points_solve, projs_solve,
         idxs_solve, Kinit, Rinit, tinit, 
         m_projection_estimation_threshold, 
-        2.0 * m_projection_estimation_threshold,
+        16.0 * m_projection_estimation_threshold,
         inliers, inliers_weak, outliers);
-
-
     ClearCameraConstraints(camera_new);
 
     if (success) {
@@ -4075,18 +3889,20 @@ bool BundlerApp::BundleRegisterImage(ImageData &data, bool init_location)
     int num_points_final = (int) inliers_weak.size();
     v3_t *points_final = new v3_t[num_points_final];
     v2_t *projs_final = new v2_t[num_points_final];
+	int *idxs_final = new int[num_points_final];
 
     for (int i = 0; i < num_points_final; i++) {
         points_final[i] = points_solve[inliers_weak[i]];
         projs_final[i] = projs_solve[inliers_weak[i]];
+		idxs_final[i] = idxs_solve[inliers_weak[i]];
     }
 
     std::vector<int> inliers_final;
 #if 1
     inliers_final = RefineCameraParameters(data, num_points_final, 
         points_final, projs_final, 
-        NULL, camera_new, 
-        NULL, !m_fixed_focal_length, true,
+        idxs_final, camera_new, 
+		NULL, !m_fixed_focal_length, true,
         m_optimize_for_fisheye,
         m_estimate_distortion,
         m_min_proj_error_threshold,
@@ -4107,7 +3923,7 @@ bool BundlerApp::BundleRegisterImage(ImageData &data, bool init_location)
 #else
 #define MIN_INLIERS_ADD_IMAGE 16
 #endif
-    if (num_inliers < 0.5 * num_points_final) {
+    if (num_inliers < 0.1 * num_points_final) {
         printf("[BundleRegisterImage] "
 	       "Threw out too many outliers [%d / %d]\n", 
 	       num_inliers, num_points_final);
@@ -4267,8 +4083,11 @@ int BundlerApp::RemoveBadPointsAndCameras(int num_points, int num_cameras,
 
 void BundlerApp::BundleGetParams() 
 {
+    // #define RERUN_ADD_POINTS
+#ifdef RERUN_ADD_POINTS
     /* Compute initial image information */
     ComputeGeometricConstraints();
+#endif
 
     int num_pts = (int) m_point_data.size();
     int num_images = GetNumImages();
@@ -4298,8 +4117,10 @@ void BundlerApp::BundleGetParams()
         if (m_image_data[i].m_camera.m_adjusted) {
             m_image_data[i].LoadKeys(false, !m_optimize_for_fisheye);
 
+#ifdef RERUN_ADD_POINTS
             m_image_data[i].ReadKeyColors();
             SetTracks(i);
+#endif
 
             added_order[num_init_cams] = i;
             added_order_inv[i] = num_init_cams;
@@ -4354,7 +4175,11 @@ void BundlerApp::BundleGetParams()
     /* Set up the points, visibility mask and projections */
     printf("[ReRunSFM] Setting up views...\n");
 
+#ifndef RERUN_ADD_POINTS
+    v3_t *init_pts = new v3_t[num_pts];
+#else
     v3_t *init_pts = new v3_t[m_track_data.size()];
+#endif
 
     v3_t *colors = new v3_t[num_pts];
 
@@ -4406,9 +4231,11 @@ void BundlerApp::BundleGetParams()
 
     CheckPointKeyConsistency(pt_views, added_order);
 
+#ifdef RERUN_ADD_POINTS
     BundleAdjustAddAllNewPoints(num_pts, num_init_cams,
         added_order, cameras, init_pts, colors,
         0.0, pt_views, 16.0, 2);
+#endif 
 
     DumpOutputFile(m_output_directory, m_bundle_output_file, 
         num_images, num_init_cams, num_pts,
@@ -4486,7 +4313,10 @@ void BundlerApp::BundleGetParams()
 
     /* Dump output */
     if (m_bundle_output_file != NULL) {
-        DumpOutputFile(m_output_directory, m_bundle_output_file, 
+		string output(m_bundle_output_file);
+		output.erase(output.end()-4,output.end());
+		output.append("_sfm.out");
+		DumpOutputFile(m_output_directory, output.c_str(), 
             num_images, num_init_cams, num_pts,
             added_order, cameras, init_pts, colors, pt_views);
     }

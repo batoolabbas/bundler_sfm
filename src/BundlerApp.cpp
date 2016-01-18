@@ -224,6 +224,7 @@ void BundlerApp::ProcessOptions(int argc, char **argv)
 	    {"rerun_bundle", 0, 0, 'j'},
 	    {"slow_bundle",  0, 0, 'D'},
 		{"get_params", 0, 0, 'g'},
+		{"match_add_table", 1, 0, '+'},
 
 #ifdef __USE_CERES__
             {"use_ceres",    0, 0, 371},
@@ -355,6 +356,9 @@ void BundlerApp::ProcessOptions(int argc, char **argv)
 			m_get_params = true;
 		break;
 
+		case '+':
+			m_add_match_directory = strdup(optarg);
+		break;
 
 	    case 'f':
 		m_fisheye = true;
@@ -1033,8 +1037,13 @@ bool BundlerApp::OnInit()
 	if(m_get_params)
 	{
 		assert(m_bundle_provided && m_add_image_file);
-		ReRunSFM();
-//		BundleGetParams();
+//		m_min_max_matches = 1;
+//		m_run_bundle = true;
+		if (0)
+			ReRunSFM();
+		else
+			BundleGetParams();
+
 		exit(0);
 	}
 

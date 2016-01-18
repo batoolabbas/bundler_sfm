@@ -181,6 +181,17 @@ public:
         // m_neighbors.resize(num_images);
     }
 
+	void DoubleSize()
+	{
+		int size = m_match_lists.size();
+		m_match_lists.resize(size*2);
+	}
+
+	int Size()
+	{
+		return  m_match_lists.size();
+	}
+
     void SetMatch(MatchIndex idx) { 
         if (Contains(idx))
             return;  // already set
@@ -369,6 +380,7 @@ public:
 
     /* Load matches from files */
     void LoadMatches();
+	void LoadAddMatches();
     void ReadMatchFile(int i, int j);
     void LoadMatchTable(const char *filename);
     void LoadMatchIndexes(const char *index_dir);
@@ -543,6 +555,7 @@ public:
     char *m_point_constraint_file;
 
     bool m_matches_loaded;    /* Have the matches been loaded? */
+	bool m_add_matches_loaded;
     bool m_matches_computed;  /* Have the matches been computed? */
     // bool *m_matches;          /* Match matrix */    
 
@@ -583,7 +596,8 @@ public:
     const char *m_match_index_dir;     /* Which directory are match indexes
                                         * stored in? */
     const char *m_match_table;         /* File where match table is stored */
-    const char *m_key_directory;
+    const char *m_add_match_directory;
+	const char *m_key_directory;
     const char *m_image_directory;
     const char *m_sift_binary;         /* Where can we find the sift binary? */
 

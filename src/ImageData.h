@@ -409,6 +409,7 @@ public:
     std::vector<KeypointWithDesc> m_keys_desc; /* Keypoints with descriptors */
     std::vector<KeypointWithScaleRot> m_keys_scale_rot;
     std::vector<bool> m_key_flags;
+	std::vector<bool> m_track_flags;
 
     std::vector<int> m_visible_points;  /* Indices of points visible
                                          * in this image */
